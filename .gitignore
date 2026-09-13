@@ -7,3 +7,9 @@ X.npy
 Y.npy
 sign_language_translator_project_context.md
 deep-learning-tutorial-for-beginners.ipynb
+prediction_server.py
+phase6_GUI.py
+package-lock.json
+Frontend/
+models/dynamic_labels.json
+models/dynamic_sign_classifier.joblib

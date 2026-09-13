@@ -7,10 +7,18 @@ import {
 
 type SignMode = "static" | "dynamic";
 
+type PredictionState = {
+  label: string | null;
+  confidence: number | null;
+  handDetected: boolean;
+  bufferedFrames: number;
+};
+
 const MEDIAPIPE_WASM_URL =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const HAND_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const PREDICTION_SERVER_URL = "http://localhost:8000/predict";
 
 const HAND_CONNECTIONS: Array<[number, number]> = [
   [0, 1], [1, 2], [2, 3], [3, 4],
@@ -27,11 +35,71 @@ function App() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
+  const requestInFlightRef = useRef(false);
+  const clientIdRef = useRef(crypto.randomUUID());
+  const [prediction, setPrediction] = useState<PredictionState>({
+    label: null,
+    confidence: null,
+    handDetected: false,
+    bufferedFrames: 0,
+  });
 
-  const prediction = mode === "static" ? "A" : "HELLO";
-  const confidence = mode === "static" ? 96 : 92;
+  const clearPrediction = () => {
+    setPrediction({
+      label: null,
+      confidence: null,
+      handDetected: false,
+      bufferedFrames: 0,
+    });
+  };
+
+  const requestPrediction = async (video: HTMLVideoElement) => {
+    const captureCanvas = captureCanvasRef.current;
+    if (!captureCanvas || requestInFlightRef.current) {
+      return;
+    }
+
+    requestInFlightRef.current = true;
+    captureCanvas.width = video.videoWidth;
+    captureCanvas.height = video.videoHeight;
+    captureCanvas.getContext("2d")?.drawImage(video, 0, 0);
+
+    try {
+      const response = await fetch(PREDICTION_SERVER_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          clientId: clientIdRef.current,
+          image: captureCanvas.toDataURL("image/jpeg", 0.7),
+        }),
+      });
+      const result = (await response.json()) as {
+        prediction: string | null;
+        confidence: number | null;
+        handDetected: boolean;
+        bufferedFrames: number;
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(result.error ?? "Prediction service returned an error");
+      }
+      setPrediction({
+        label: result.prediction,
+        confidence: result.confidence,
+        handDetected: result.handDetected,
+        bufferedFrames: result.bufferedFrames,
+      });
+    } catch (error) {
+      console.error("Prediction request failed", error);
+      clearPrediction();
+    } finally {
+      requestInFlightRef.current = false;
+    }
+  };
 
   useEffect(() => {
     let animationFrameId = 0;
@@ -111,6 +179,11 @@ function App() {
           }
           const results = handLandmarker.detectForVideo(video, performance.now());
           drawResults(results);
+          if (results.landmarks.length === 0) {
+            clearPrediction();
+          } else {
+            void requestPrediction(video);
+          }
           animationFrameId = requestAnimationFrame(trackHands);
         };
         trackHands();
@@ -140,7 +213,7 @@ function App() {
         context.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
     };
-  }, [isRunning]);
+  }, [isRunning, mode]);
 
   useEffect(() => {
     return () => {
@@ -155,6 +228,7 @@ function App() {
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
+      clearPrediction();
       setIsRunning(false);
       return;
     }
@@ -174,6 +248,7 @@ function App() {
         audio: false,
       });
       streamRef.current = stream;
+      clearPrediction();
       setIsRunning(true);
     } catch (error) {
       const name = error instanceof DOMException ? error.name : "";
@@ -324,6 +399,7 @@ function App() {
                       ref={canvasRef}
                       className="pointer-events-none absolute inset-0 h-full w-full scale-x-[-1]"
                     />
+                    <canvas ref={captureCanvasRef} className="hidden" />
                   </>
                 ) : (
                   <div className="text-center">
@@ -388,7 +464,9 @@ function App() {
 
               <div className="my-6 text-center">
                 <span className="text-6xl font-bold tracking-wider">
-                  {isRunning ? prediction : "--"}
+                  {isRunning && prediction.handDetected && prediction.label
+                    ? prediction.label
+                    : "--"}
                 </span>
               </div>
 
@@ -400,7 +478,9 @@ function App() {
                   </span>
 
                   <span className="font-semibold">
-                    {isRunning ? `${confidence}%` : "--"}
+                    {isRunning && prediction.handDetected && prediction.confidence !== null
+                      ? `${Math.round(prediction.confidence * 100)}%`
+                      : "--"}
                   </span>
                 </div>
 
@@ -408,7 +488,10 @@ function App() {
                   <div
                     className="h-full rounded-full bg-blue-500 transition-all"
                     style={{
-                      width: isRunning ? `${confidence}%` : "0%",
+                      width:
+                        isRunning && prediction.handDetected && prediction.confidence !== null
+                          ? `${prediction.confidence * 100}%`
+                          : "0%",
                     }}
                   />
                 </div>

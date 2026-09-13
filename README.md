@@ -266,6 +266,20 @@ Controls:
 
 Phase 4 recognizes the current static dataset labels: digits `0` through `9` and letters `A` through `Z`.
 
+### Run the Browser Frontend
+
+The React frontend uses the browser camera and sends frames to the local prediction
+service. Start the service from the project root, then start Vite in a second terminal:
+
+```powershell
+python prediction_server.py
+cd Frontend
+npm run dev
+```
+
+Open the Vite URL, allow camera access, and click **Start Recognition**. Static mode
+classifies each frame; dynamic mode continuously refreshes its 30-frame sequence window.
+
 ---
 
 ## Common Errors
